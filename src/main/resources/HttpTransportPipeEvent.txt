@@ -1,0 +1,7 @@
+Timestamp: {{ timestamp }}
+Host: {{ host }}
+{{#headers}}
+{{ name }}: {{ value }}
+{{/headers}}
+
+{{ xml }}
