@@ -1,6 +1,12 @@
 About
 =====
-This tool
+This tool is a GUI for XML files representing Log4j logs.
+
+Features
+--------
+
+*   open local XML log file
+*   open remote XML log file via SCP
 
 Setup
 =====
