@@ -2,29 +2,20 @@ package sk.upjs.ics.novotnyr.mlt.gui;
 
 import com.wordpress.tips4java.IconTableCellRenderer;
 import com.wordpress.tips4java.TableColumnAdjuster;
+import org.apache.commons.io.FileUtils;
 import sk.upjs.ics.novotnyr.mlt.CompositeErrorLogEventDetector;
 import sk.upjs.ics.novotnyr.mlt.Http500LogEventDetector;
 import sk.upjs.ics.novotnyr.mlt.HttpTransportPipeEvent;
-import sk.upjs.ics.novotnyr.mlt.HttpTransportPipeEventExporter;
 import sk.upjs.ics.novotnyr.mlt.Log4jMetroParser;
 import sk.upjs.ics.novotnyr.mlt.SoapFaultLogEventDetector;
+import sk.upjs.ics.novotnyr.mlt.gui.scp.OpenRemoteLogFileAction;
+import sk.upjs.ics.novotnyr.mlt.gui.scp.SshHostConfiguration;
+import sk.upjs.ics.novotnyr.mlt.scp.DownloadToTemporaryFileSftpOperation;
+import sk.upjs.ics.novotnyr.mlt.scp.GetRemoteFileInputStreamSftpOperation;
+import sk.upjs.ics.novotnyr.mlt.scp.JSchTemplate;
+import sk.upjs.ics.novotnyr.mlt.scp.SshUserInfo;
 
-import javax.swing.Icon;
-import javax.swing.ImageIcon;
-import javax.swing.JButton;
-import javax.swing.JFileChooser;
-import javax.swing.JFrame;
-import javax.swing.JOptionPane;
-import javax.swing.JScrollPane;
-import javax.swing.JSplitPane;
-import javax.swing.JTable;
-import javax.swing.JToolBar;
-import javax.swing.ListSelectionModel;
-import javax.swing.SwingConstants;
-import javax.swing.SwingUtilities;
-import javax.swing.SwingWorker;
-import javax.swing.UIManager;
-import javax.swing.WindowConstants;
+import javax.swing.*;
 import javax.swing.event.ListSelectionEvent;
 import javax.swing.event.ListSelectionListener;
 import javax.swing.table.DefaultTableModel;
@@ -43,20 +34,18 @@ import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
-import java.awt.event.WindowListener;
-import java.io.File;
-import java.io.IOException;
-import java.io.PrintWriter;
+import java.io.*;
 import java.util.Date;
 import java.util.List;
-import java.util.Vector;
+import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 
 import static sk.upjs.ics.novotnyr.mlt.gui.EmptyTableModelDecorator.unwrapModel;
 
 public class LogViewerForm extends JFrame {
-	public static final File NO_FILE = null;
+	public static final LogFile NO_LOG_FILE = null;
 	public static final Date NO_DATE_FILTER = null;
+	public static final String IDLE = "Idle";
 
 	private LogEventPanel logEventPanel;
 
@@ -66,7 +55,13 @@ public class LogViewerForm extends JFrame {
 	private TableColumnAdjuster tableColumnAdjuster;
 	private ExportLogEventAction exportLogEventAction;
 
+	private JLabel statusBarLabel = new JLabel(IDLE);
+
 	private Configuration configuration = Configuration.getInstance();
+
+	private Date currentFilterSince;
+
+	private AbstractOpenLogFileAction currentLogFileAction;
 
 	public LogViewerForm()  {
 		initWindowListener();
@@ -77,7 +72,7 @@ public class LogViewerForm extends JFrame {
 
 		enableDropSupport();
 
-		updateWindowTitle(NO_FILE);
+		updateWindowTitle(NO_LOG_FILE);
 
 		this.splitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT);
 
@@ -90,6 +85,8 @@ public class LogViewerForm extends JFrame {
 		this.splitPane.setRightComponent(logEventPanel);
 
 		add(this.splitPane);
+
+		add(this.statusBarLabel, BorderLayout.SOUTH);
 
 		setSize(800, 600);
 		setLocationRelativeTo(null);
@@ -115,7 +112,9 @@ public class LogViewerForm extends JFrame {
 	private void initToolBar() {
 		JToolBar toolBar = new JToolBar();
 		initOpenButton(toolBar);
+		initRemoteOpenButton(toolBar);
 		initExportButton(toolBar);
+		initReloadButton(toolBar);
 
 		add(toolBar, BorderLayout.NORTH);
 	}
@@ -135,8 +134,25 @@ public class LogViewerForm extends JFrame {
 		toolBar.add(openButton);
 	}
 
+	private void initRemoteOpenButton(JToolBar toolBar) {
+		JButton remoteOpenButton = new JButton("Remote Open");
+		remoteOpenButton.setIcon(new ImageIcon(ClassLoader.getSystemResource("Open-32.png")));
+		remoteOpenButton.setVerticalTextPosition(SwingConstants.BOTTOM);
+		remoteOpenButton.setHorizontalTextPosition(SwingConstants.CENTER);
+		remoteOpenButton.addActionListener(new ActionListener() {
+			@Override
+			public void actionPerformed(ActionEvent e) {
+				LogViewerForm.this.onRemoteOpenButtonClick(e);
+			}
+		});
+
+		toolBar.add(remoteOpenButton);
+	}
+
+
 	private void initExportButton(JToolBar toolBar) {
 		exportLogEventAction = new ExportLogEventAction(this);
+		exportLogEventAction.setEnabled(false);
 
 		JButton exportButton = new JButton(exportLogEventAction);
 		exportButton.setVerticalTextPosition(SwingConstants.BOTTOM);
@@ -145,22 +161,82 @@ public class LogViewerForm extends JFrame {
 		toolBar.add(exportButton);
 	}
 
+	private void initReloadButton(JToolBar toolBar) {
+		JButton reloadButton = new JButton("Reload");
+		reloadButton.setIcon(new ImageIcon(ClassLoader.getSystemResource("icon-reload.png")));
+		reloadButton.setVerticalTextPosition(SwingConstants.BOTTOM);
+		reloadButton.setHorizontalTextPosition(SwingConstants.CENTER);
+		reloadButton.addActionListener(new ActionListener() {
+			@Override
+			public void actionPerformed(ActionEvent e) {
+				LogViewerForm.this.onReloadButtonClick(e);
+			}
+		});
+
+		toolBar.add(reloadButton);
+	}
+
 	private void onOpenButtonClick(ActionEvent e) {
 		OpenFilteredFileDialog dialog = new OpenFilteredFileDialog(this);
 		dialog.setVisible(true);
 		File selectedFile = dialog.getSelectedFile();
 		if(selectedFile != null) {
-			initLogEventsTableData(selectedFile, dialog.getFilterSince());
-			updateWindowTitle(selectedFile);
-			tableColumnAdjuster.adjustColumns();
+			this.currentFilterSince = dialog.getFilterSince();
+			this.currentLogFileAction = new OpenLocalLogFileAction(selectedFile) {
+				@Override
+				protected void onLogFileAvailable(LogFile logFile) {
+					reloadLogFile(logFile);
+				}
+
+				@Override
+				protected void notifyProgress(String message) {
+					updateStatusBar(message);
+				}
+			};
+			this.currentLogFileAction.actionPerformed(null);
 		}
 		dialog.dispose();
 	}
 
-	private void updateWindowTitle(File selectedFile) {
+	private void reloadLogFile(LogFile logFile) {
+		initLogEventsTableData(logFile, this.currentFilterSince);
+		updateWindowTitle(logFile);
+		tableColumnAdjuster.adjustColumns();
+		this.exportLogEventAction.setEnabled(true);
+	}
+
+	private void onReloadButtonClick(ActionEvent e) {
+		this.currentLogFileAction.actionPerformed(null);
+	}
+
+	private void onRemoteOpenButtonClick(ActionEvent actionEvent) {
+		final OpenRemoteFileDialog dialog = new OpenRemoteFileDialog(this);
+		dialog.setVisible(true);
+		final String remoteFileName = dialog.getRemoteFile();
+		SshHostConfiguration sshHostConfiguration = dialog.getSshHostConfiguration();
+		if(remoteFileName != null && sshHostConfiguration != null) {
+			LogViewerForm.this.currentFilterSince = dialog.getFilterSince();
+
+			this.currentLogFileAction = new OpenRemoteLogFileAction(this, sshHostConfiguration, remoteFileName) {
+				@Override
+				protected void onLogFileAvailable(LogFile logFile) {
+					LogViewerForm.this.reloadLogFile(logFile);
+				}
+
+				@Override
+				protected void notifyProgress(String message) {
+					updateStatusBar(message);
+				}
+			};
+			this.currentLogFileAction.actionPerformed(null);
+		}
+		dialog.dispose();
+	}
+
+	private void updateWindowTitle(LogFile selectedLogFile) {
 		StringBuilder title = new StringBuilder("MLT");
-		if(selectedFile != null) {
-			title.append(" [").append(selectedFile).append("]");
+		if(selectedLogFile != null) {
+			title.append(" [").append(selectedLogFile.getDescription()).append("]");
 		}
 		this.setTitle(title.toString());
 	}
@@ -181,7 +257,7 @@ public class LogViewerForm extends JFrame {
 		this.logEventsTable.setDefaultRenderer(String.class, getLogEventTableCellRenderer());
 		this.logEventsTable.setDefaultRenderer(Icon.class, new IconTableCellRenderer());
 
-		initLogEventsTableData(NO_FILE);
+		initLogEventsTableData(NO_LOG_FILE);
 
 		ListSelectionListener listSelectionListener = new ListSelectionListener() {
 			@Override
@@ -214,8 +290,8 @@ public class LogViewerForm extends JFrame {
 		return tableModel.getLogEvent(selectedRow);
 	}
 
-	private void initLogEventsTableData(final File file, final Date filterSince) {
-		if(file == null || !file.exists()) {
+	private void initLogEventsTableData(final LogFile logFile, final Date filterSince) {
+		if(logFile == null) {
 			return;
 		}
 
@@ -227,7 +303,7 @@ public class LogViewerForm extends JFrame {
 				if(filterSince != null) {
 					parser.setSinceDate(filterSince);
 				}
-				return parser.parse(file);
+				return parser.parse(logFile.getInputStream());
 			}
 
 			@Override
@@ -262,8 +338,8 @@ public class LogViewerForm extends JFrame {
 	}
 
 
-	private void initLogEventsTableData(final File file) {
-		initLogEventsTableData(file, NO_DATE_FILTER);
+	private void initLogEventsTableData(final LogFile logFile) {
+		initLogEventsTableData(logFile, NO_DATE_FILTER);
 	}
 
 	private void enableDropSupport() {
@@ -289,7 +365,7 @@ public class LogViewerForm extends JFrame {
 							.getTransferData(dataFlavor);
 					File droppedFile = files.get(0);
 
-					LogViewerForm.this.initLogEventsTableData(droppedFile);
+					LogViewerForm.this.initLogEventsTableData(new FileSystemLogFile(droppedFile));
 
 					event.dropComplete(true);
 				} catch (UnsupportedFlavorException e) {
@@ -303,6 +379,10 @@ public class LogViewerForm extends JFrame {
 		Component currentWindow = this;
 		DropTarget dropTarget = new DropTarget(currentWindow, listener);
 		currentWindow.setDropTarget(dropTarget);
+	}
+
+	public void updateStatusBar(String message) {
+		this.statusBarLabel.setText(message);
 	}
 
 

@@ -3,11 +3,7 @@ package sk.upjs.ics.novotnyr.mlt;
 import nu.xom.*;
 
 import javax.xml.stream.XMLStreamException;
-import java.io.File;
-import java.io.FileNotFoundException;
-import java.io.FileReader;
-import java.io.IOException;
-import java.io.Reader;
+import java.io.*;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -152,10 +148,21 @@ public class Log4jMetroParser {
 		}
 	}
 
+	public List<HttpTransportPipeEvent> parse(InputStream inputStream) throws LogRecordParsingException {
+		return parse(new InputStreamReader(inputStream));
+	}
+
 	public List<HttpTransportPipeEvent> parse(File file) throws LogRecordParsingException {
-		Reader reader = null;
 		try {
-			reader = new ProloguingAndEpiloguingReader(new FileReader(file), PROLOG, EPILOG);
+			return parse(new FileReader(file));
+		} catch (FileNotFoundException e) {
+			throw new LogRecordParsingException("Unable to read Log4j XML due to I/O error", e);
+		}
+	}
+
+	public List<HttpTransportPipeEvent> parse(Reader reader) throws LogRecordParsingException {
+		try {
+			reader = new ProloguingAndEpiloguingReader(reader, PROLOG, EPILOG);
 
 			HttpTransportPipeEventCollector collector = new HttpTransportPipeEventCollector();
 			collector.setSinceDateFilter(this.sinceDateFilter);
