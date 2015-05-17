@@ -1,8 +1,9 @@
 package sk.upjs.ics.novotnyr.mlt.gui;
 
 import net.miginfocom.swing.MigLayout;
+import sk.upjs.ics.novotnyr.mlt.gui.scp.ScpFileConfiguration;
+import sk.upjs.ics.novotnyr.mlt.gui.scp.ScpFileConfigurationManager;
 import sk.upjs.ics.novotnyr.mlt.gui.scp.SshHostConfiguration;
-import sk.upjs.ics.novotnyr.mlt.gui.scp.SshHostConfigurationManager;
 
 import javax.swing.*;
 import java.awt.*;
@@ -16,6 +17,10 @@ import java.util.GregorianCalendar;
 public class OpenRemoteFileDialog extends JDialog {
 
     private Configuration configuration = Configuration.getInstance();
+
+    private JLabel userNameLabel = new JLabel("User");
+
+    private JTextField userNameTextField = new JTextField(30);
 
     private JLabel remoteFileLabel = new JLabel("Remote file");
 
@@ -35,13 +40,11 @@ public class OpenRemoteFileDialog extends JDialog {
 
     private JLabel privateKeyPassphraseLabel = new JLabel("Key passphrase");
 
-    private JTextField privateKeyPassphraseTextField = new JTextField(30);
+    private JPasswordField privateKeyPassphraseTextField = new JPasswordField(30);
 
-    private JLabel sshSettingsFileLabel = new JLabel("SSH Config file");
+    private JButton scpFileConfigurationSaveButton = new JButton("Save");
 
-    private JTextField sshSettingsFileTextField = new JTextField(30);
-
-    private JButton sshSettingsFileOpenButton = new JButton("...");
+    private JButton scpFileConfigurationLoadButton = new JButton("Load");
 
     private final JLabel filterLabel = new JLabel("Include only events after: ");
 
@@ -53,28 +56,32 @@ public class OpenRemoteFileDialog extends JDialog {
 
     // --- proper ties
 
-    private File sshSettingsFile;
-
-    private SshHostConfiguration sshHostConfiguration;
+    private ScpFileConfiguration scpFileConfiguration;
 
     // --- dependencies
 
-    private SshHostConfigurationManager sshHostConfigurationManager = new SshHostConfigurationManager();
+    private ScpFileConfigurationManager scpFileConfigurationManager = new ScpFileConfigurationManager();
+
 
     public OpenRemoteFileDialog(Window owner) {
         super(owner, "Open remote filtered file...", ModalityType.APPLICATION_MODAL);
 
-        setLayout(new MigLayout("", "[][fill,grow][]", "[][][nogrid]"));
+        setLayout(new MigLayout("", "[][fill,grow]", "[nogrid][][][][][nogrid]"));
 
-        add(sshSettingsFileLabel);
-        add(sshSettingsFileTextField);
-        add(sshSettingsFileOpenButton, "wrap");
-        sshSettingsFileOpenButton.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                OpenRemoteFileDialog.this.onSshSettingsFileOpenButtonClick(e);
-            }
-        });
+        add(remoteHostLabel);
+        add(remoteHostTextField, "growx");
+
+        add(remotePortLabel);
+        add(remotePortTextField, "wrap, width 40:40:");
+
+        add(userNameLabel);
+        add(userNameTextField, "wrap");
+
+        add(privateKeyFileLabel);
+        add(privateKeyFileTextField, "wrap");
+
+        add(privateKeyPassphraseLabel);
+        add(privateKeyPassphraseTextField, "wrap");
 
         add(remoteFileLabel);
         add(remoteFileTextField, "wrap");
@@ -85,6 +92,22 @@ public class OpenRemoteFileDialog extends JDialog {
         dateSpinner.setEditor(dateEditor);
         dateSpinner.setValue(threeDaysAgo());
         add(dateSpinner, "wrap");
+
+        add(scpFileConfigurationLoadButton);
+        scpFileConfigurationLoadButton.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                OpenRemoteFileDialog.this.onScpFileConfigurationLoadButtonClick(e);
+            }
+        });
+
+        add(scpFileConfigurationSaveButton);
+        scpFileConfigurationSaveButton.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                OpenRemoteFileDialog.this.onScpFileConfigurationSaveButtonClick(e);
+            }
+        });
 
         add(okButton, "tag ok");
         okButton.addActionListener(new ActionListener() {
@@ -107,36 +130,70 @@ public class OpenRemoteFileDialog extends JDialog {
         pack();
     }
 
+
     private void onOkButtonClick(ActionEvent e) {
-        this.sshSettingsFile = new File(this.sshSettingsFileTextField.getText());
-        loadSshHostConfiguration();
+        this.scpFileConfiguration = bindToScpFileConfiguration();
         setVisible(false);
     }
 
     private void onCancelButtonClick(ActionEvent e) {
         setVisible(false);
-        this.sshHostConfiguration = null;
+        this.scpFileConfiguration = null;
     }
 
 
-    private void onSshSettingsFileOpenButtonClick(ActionEvent e) {
+    private void onScpFileConfigurationLoadButtonClick(ActionEvent e) {
         JFileChooser fileChooser = new JFileChooser();
         if(fileChooser.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
-            this.sshSettingsFile = fileChooser.getSelectedFile();
-            sshSettingsFileTextField.setText(sshSettingsFile.toString());
+            File sshSettingsFile = fileChooser.getSelectedFile();
+            this.scpFileConfiguration = scpFileConfigurationManager.load(sshSettingsFile);
+            bindFromScpFileConfiguration();
         }
     }
 
-    private void loadSshHostConfiguration() {
-        this.sshHostConfiguration = sshHostConfigurationManager.load(this.sshSettingsFile);
+    private void bindFromScpFileConfiguration() {
+        this.userNameTextField.setText(this.scpFileConfiguration.getSshHostConfiguration().getUserName());
+        this.remoteHostTextField.setText(this.scpFileConfiguration.getSshHostConfiguration().getHostName());
+        this.remotePortTextField.setText(String.valueOf(this.scpFileConfiguration.getSshHostConfiguration().getPort()));
+        this.privateKeyFileTextField.setText(this.scpFileConfiguration.getSshHostConfiguration().getPrivateKeyFile().toString());
+        this.privateKeyPassphraseTextField.setText(this.scpFileConfiguration.getSshHostConfiguration().getPrivateKeyPassphrase());
+
+        this.remoteFileTextField.setText(scpFileConfiguration.getRemoteFileName());
     }
 
+    private void onScpFileConfigurationSaveButtonClick(ActionEvent e) {
+        JFileChooser fileChooser = new JFileChooser();
+        if(fileChooser.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
+            File scpSettingsFile = fileChooser.getSelectedFile();
+
+            ScpFileConfiguration scpFileConfiguration = bindToScpFileConfiguration();
+            this.scpFileConfigurationManager.save(scpFileConfiguration, scpSettingsFile);
+            this.scpFileConfiguration = scpFileConfiguration;
+        }
+    }
+
+    private ScpFileConfiguration bindToScpFileConfiguration() {
+        ScpFileConfiguration scpFileConfiguration = new ScpFileConfiguration();
+        SshHostConfiguration sshHostConfiguration = new SshHostConfiguration();
+        scpFileConfiguration.setSshHostConfiguration(sshHostConfiguration);
+
+        sshHostConfiguration.setHostName(remoteHostTextField.getText());
+        sshHostConfiguration.setPort(Integer.parseInt(remotePortTextField.getText()));
+        sshHostConfiguration.setUserName(userNameTextField.getText());
+        sshHostConfiguration.setPrivateKeyFile(privateKeyFileTextField.getText());
+        sshHostConfiguration.setPrivateKeyPassphrase(privateKeyPassphraseTextField.getText());
+
+        scpFileConfiguration.setRemoteFileName(remoteFileTextField.getText());
+        return scpFileConfiguration;
+    }
+
+
     public SshHostConfiguration getSshHostConfiguration() {
-        return sshHostConfiguration;
+        return this.scpFileConfiguration.getSshHostConfiguration();
     }
 
     public String getRemoteFile() {
-        return this.remoteFileTextField.getText();
+        return this.scpFileConfiguration.getRemoteFileName();
     }
 
     private Date threeDaysAgo() {

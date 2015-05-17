@@ -25,7 +25,7 @@ public class DownloadToTemporaryFileSftpOperation extends SftpChannelHandler imp
     @Override
     protected void doInChannel(ChannelSftp channel) {
         try {
-            tempFile = File.createTempFile(UUID.randomUUID().toString(), "");
+            tempFile = File.createTempFile(UUID.randomUUID().toString(), ".log");
 
             logger.info("Downloading to {}" ,tempFile);
 

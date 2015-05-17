@@ -23,7 +23,7 @@ public class SshUserInfo implements UserInfo {
 
     @Override
     public String getPassphrase() {
-        logger.debug("Returning passphrase");
+        logger.debug("Returning passphrase " + this.privateKeyPassphrase);
         return this.privateKeyPassphrase;
     }
 
